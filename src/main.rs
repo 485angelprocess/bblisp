@@ -38,7 +38,7 @@ fn prompt() -> String{
     input("> ")
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum LispType{
     Imm,
     Int,
@@ -47,6 +47,7 @@ enum LispType{
 }
 
 /// Argument with accoman
+#[derive(Clone)]
 struct LispData{
     pub tag: LispType,
     pub s: Option<String>,
@@ -83,6 +84,90 @@ impl LispData{
         }
     }
 
+    /// Get first inner enclosure
+    pub fn get_inner(v: &Vec<LispData>) -> (Vec<LispData>, Vec<LispData>, Vec<LispData>){
+        let mut inner = Vec::new();
+        let mut substr = String::new();
+
+        let mut post = false;
+
+        let mut before = Vec::new();
+        let mut after = Vec::new();
+
+        let mut depth = 0;
+
+        for d in v{
+            match d.tag{
+                LispType::Imm => {
+                    for c in d.s.as_ref().unwrap().chars(){
+                         substr.push(c);
+                        
+                        if c == '('{
+                            if depth == 0 && !post{
+                                before.push(LispData::new_line(substr.clone()));
+                                substr.clear();
+                            }
+                            depth += 1;
+                        }
+                        else if c == ')'{
+                            depth -= 1;
+                            if depth == 0{
+                                // Keep track of other values
+                                if post{
+                                    after.push(LispData::new_line(substr.clone()));
+                                }
+                                substr.clear();
+                            }
+                            if depth == 1{
+                                if substr.len() > 0 {
+                                    inner.push(LispData::new_line(substr.clone()));
+                                    substr.clear();
+                                    for i in &inner{
+                                        println!("inner: {}", i.as_string());
+                                    }
+                                    post = true;
+                                }
+                            }
+                        }
+                    }
+                },
+                _ => {
+                    if depth == 0{
+                        // KEep track of before and after
+                        if post{
+                            if substr.len() > 0{
+                                // Push new substring
+                                after.push(LispData::new_line(substr.clone()));
+                                substr.clear();
+                            }
+                            // Push data representation
+                            after.push(d.clone());
+                        }
+                        else{
+                            if substr.len() > 0{
+                                // Push new substring
+                                before.push(LispData::new_line(substr.clone()));
+                                substr.clear();
+                            }
+                            // Push data representation
+                            before.push(d.clone());
+                        }
+                    }
+                    else{
+                        if substr.len() > 0{
+                            // Push new substring
+                            inner.push(LispData::new_line(substr.clone()));
+                            substr.clear();
+                        }
+                        // Push data representation
+                        inner.push(d.clone());
+                    }
+                }
+            }
+        }
+        return (inner, before, after);
+    }
+
     pub fn as_string(&self) -> String{
         match self.tag{
             LispType::Imm => format!("{}", self.s.clone().unwrap()),
@@ -100,21 +185,32 @@ struct Call{
 
 impl Call{
     /// Get number of of opening and closing parantheses
-    pub fn num_closures(s: &String) -> (usize, usize){
+    pub fn num_closures(data: &Vec<LispData>) -> (usize, usize){
         let mut openings = 0;
         let mut closings = 0;
-        for c in s.chars(){
-            if c == '('{
-                openings += 1;
-            }
-            if c == ')'{
-                closings += 1;
+
+        for d in data{
+            match d.tag{
+                LispType::Imm => {
+                    // Parse any written stuff and find parantheses
+                    for c in d.s.as_ref().unwrap().chars(){
+                        if c == '('{
+                            openings += 1;
+                        }
+                        if c == ')'{
+                            closings += 1;
+                        }
+                    }
+                },
+                _ => ()
             }
         }
+        
         (openings, closings)
     }
 
-    fn parse(line: Vec<LispData>) -> Self{
+    /// Get a function call with arguments from line of code
+    fn parse(line: &Vec<LispData>) -> Self{
         let mut args: Vec<LispData> = Vec::new();
 
         let mut counter = 0;
@@ -125,15 +221,36 @@ impl Call{
         let op = split_line.next().unwrap();
         println!("Function name {}", op);
         
-        // Ok get first argument
-        if let Some(arg) = split_line.next(){
-            // There is an additional 
-            let new_arg = LispData::new_imm(arg.to_string());
-            args.push(new_arg);
+        let mut i = 0;
+
+        while counter < line.len() && i < 100{
+            match line[counter].tag{
+                // Get arguments from existing values
+                LispType::Imm => {
+                    if let Some(arg) = split_line.next(){
+                        if arg.len() == 0{
+                            counter += 1;
+                        }
+                        else{
+                            // There is an additional 
+                            //println!("Parsing arg {}", arg.to_string());
+                            let new_arg = LispData::new_imm(arg.to_string());
+                            args.push(new_arg);
+                        }
+                    }
+                    else{
+                        counter += 1;
+                    }
+                },
+                _ => {
+                    // Already parsed data
+                    args.push(line[counter].clone());
+                    counter += 1;
+                }
+            }
+            i += 1;
         }
-
-        // TODO parse further values
-
+        
         Self{
             op: op.to_string(),
             args: args
@@ -150,22 +267,36 @@ impl Call{
     }
 }
 
-fn run(c: Call, table: &FunctionTable){
+/// Print output and return first parameter
+fn lisp_print(args: &Vec<LispData>) -> Vec<LispData>{
+    println!("{}", args[0].as_string());
+    vec![args[0].clone()]
+}
+
+/// Eval STUB
+fn lisp_eval(args: &Vec<LispData>) -> Vec<LispData>{
+    println!("Eval: {}", args[0].as_string());
+    vec![args[0].clone()]
+}
+
+fn run(c: Call, table: &FunctionTable) -> Vec<LispData>{
     if let Some(p) = table.get_primitive(&c.op){
         // TODO match args
-        match p{
-            Primitive::PRINT => println!("{}", c.args[0].as_string()),
-            Primitive::EVAL => println!("Eval {}", c.args[0].as_string()),
-            _ => println!("Unimplemented {}", c.op)
+        return match p{
+            Primitive::PRINT => lisp_print(&c.args),
+            Primitive::EVAL => lisp_eval(&c.args),
+            _ => {
+                println!("Unimplemented {}", c.op);
+                Vec::new()
+            }
         }
     }
+
+    Vec::new()
 }
 
 fn main() {
     println!("Hi! ^_^");
-    let response = prompt();
-
-    let (opening, closing) = Call::num_closures(&response);
 
     let mut table = FunctionTable::new();
 
@@ -174,28 +305,60 @@ fn main() {
     table.insert_primitive("EVAL", Primitive::EVAL);
     table.insert_primitive("READ", Primitive::READ);
 
-    if (opening == closing){
-        match opening{
-            0 => println!("No function {}", response),
-            1 => {
-                // parse
-                println!("Function {}", response);
+    let response = vec![LispData::new_line(prompt())];
 
-                // TODO: keep track of existing returns
-                let line = vec![LispData::new_line(response)];
+    // Add response to line
+    run_line(&response, &table, 0);
+}
 
-                let c = Call::parse(line);
-                c.print();
-                run(c, &table);
-            },
-            _ => {
-                // Need to go a level deeper
-                println!("Nested functions");
+/// Go through a line
+fn run_line(response: &Vec<LispData>, table: &FunctionTable, depth: usize) -> Vec<LispData>{
+    if depth > 100{
+        panic!("Too much nesting");
+    }
+
+    let mut r = response.clone();
+
+    for i in 0..100{
+        let (opening, closing) = Call::num_closures(&r);
+
+        println!("{}: Number of openings {}", i, opening);
+
+        if (opening == closing){
+            match opening{
+                0 => panic!("No function"),
+                1 => {
+                    // parse
+                    let c = Call::parse(&r);
+                    c.print();
+                    let result = run(c, table);
+                    return result;
+                },
+                _ => {
+                    // Need to go a level deeper
+                    println!("Nested functions");
+                    let (inner, before, after) = LispData::get_inner(response);
+                    let result = run_line(&inner, &table, depth + 1);
+
+                    print!("Before: ");
+                    for d in &before{
+                        print!("{}, ", d.as_string());
+                    }
+                    println!(" ");
+
+                    r = [before, result, after].concat();
+
+                    print!("Result of nest: ");
+                    for d in &r{
+                        print!("{}, ", d.as_string());
+                    }
+                    println!(" ");
+                }
             }
         }
+        else{
+            panic!("Invalid closures");
+        }
     }
-    else{
-        println!("Invalid closures");
-    }
-
+    Vec::new()
 }
